@@ -5,13 +5,14 @@ library(ggplot2)
 library(patchwork)
 library(tibble)
 library(reshape2)
+library(SeuratDisk)
 
 #### 1. Define sample names and Add Metadata ####
 sample_names <- c(
   "B3_Lib2", "B4_Lib2", "B5_Lib2", "B6_Lib2", "B7_Lib2",
   "B8_Lib2", "B9_Lib2", "B10_Lib2", "B11_Lib2"
 )
-data_paths <- paste0("/Volumes/srivalli/dzhi/ACM_sn_2025/data/Library2/", sample_names, "/filtered_feature_bc_matrix/")
+data_paths <- paste0("/home/gruengroup/srivalli/Github/ACM_SN_R_2025/data/Library2/", sample_names, "/filtered_feature_bc_matrix/")
 
 #### 2. Load and QC-filter Seurat objects ####
 seurat_list <- list()
@@ -31,15 +32,34 @@ combined_filtered <- merge(seurat_list[[1]], y = seurat_list[-1], add.cell.ids =
 combined_filtered[["percent.mt"]] <- PercentageFeatureSet(combined_filtered, pattern = "^mt-")
 combined_filtered$sample_base <- gsub("_Lib2$", "", combined_filtered$sample)
 
-meta_data <- read.csv("/Volumes/srivalli/dzhi/ACM_sn_2025/data/acm_sn_metadata.csv", stringsAsFactors = FALSE)
+meta_data <- read.csv("/home/gruengroup/srivalli/Github/ACM_SN_R_2025/data/acm_sn_metadata.csv", stringsAsFactors = FALSE)
 
 seurat_meta <- combined_filtered@meta.data %>%
   rownames_to_column("cell") %>%
   left_join(meta_data, by = c("sample_base" = "sample")) %>%
   column_to_rownames("cell")
 combined_filtered@meta.data <- seurat_meta
+if (any(is.na(seurat_meta))) {
+  warning("Some metadata entries did not merge correctly. Check for mismatched sample names.")
+}
 
 #### 4. Violin QC Plot ####
+dir.create ("/home/gruengroup/srivalli/Github/ACM_SN_R_2025/plots", showWarnings = FALSE)
+combined_for_violin <- merge(
+  seurat_list[[1]], y = seurat_list[-1],
+  add.cell.ids = names(seurat_list), project = "for_violin"
+)
+combined_for_violin[["percent.mt"]] <- PercentageFeatureSet(combined_for_violin, pattern = "^mt-")
+combined_for_violin$Sample_ID <- combined_for_violin$sample
+p_violin <- VlnPlot(
+  combined_for_violin,
+  features = c("nFeature_RNA", "nCount_RNA", "percent.mt"),
+  group.by = "Sample_ID",
+  pt.size = 0.1,
+  ncol = 3
+)
+ggsave("/home/gruengroup/srivalli/Github/ACM_SN_R_2025/plots/qc_violin_before_filtered.png", p_violin)
+
 p_violin <- VlnPlot(
   combined_filtered,
   features = c("nFeature_RNA", "nCount_RNA", "percent.mt"),
@@ -47,8 +67,7 @@ p_violin <- VlnPlot(
   pt.size = 0.1,
   ncol = 3
 )
-p_violin
-ggsave("./Documents/Github/ACM_SN_R_2025/plots/qc_violin_after_filtered.png", p_violin, width = 12, height = 6)
+ggsave("/home/gruengroup/srivalli/Github/ACM_SN_R_2025/plots/qc_violin_after_filtered.png", p_violin)
 
 #### 5. Barplot: Cell counts after filtering ####
 cell_counts <- as.data.frame(table(combined_filtered$Sample_ID))
@@ -60,20 +79,18 @@ p_bar <- ggplot(cell_counts, aes(x = Sample_ID, y = CellCount)) +
   theme_minimal() +
   labs(title = "Cell Counts After Filtering") +
   theme(axis.text.x = element_text(angle = 45, hjust = 1))
-p_bar
-ggsave("./Documents/Github/ACM_SN_R_2025/plots/cell_counts_barplot_filtered.png", p_bar, width = 10, height = 6)
+ggsave("/home/gruengroup/srivalli/Github/ACM_SN_R_2025/plots/cell_counts_barplot_filtered.png", p_bar, width = 10, height = 6)
 
 #### 6. Normalize and Identify Variable Features ####
 seurat_list <- lapply(seurat_list, function(obj) {
-  obj <- NormalizeData(obj)
-  obj <- FindVariableFeatures(obj, selection.method = "vst", nfeatures = 2000)
-  return(obj)
+  SCTransform(obj, verbose = FALSE)
 })
 
 #### 5. Integration ####
-features <- SelectIntegrationFeatures(object.list = seurat_list)
-anchors <- FindIntegrationAnchors(object.list = seurat_list, anchor.features = features,dims = 1:30)
-integrated <- IntegrateData(anchorset = anchors, dims = 1:30)
+features <- SelectIntegrationFeatures(seurat_list, nfeatures = 3000)
+seurat_list <- PrepSCTIntegration(seurat_list, anchor.features = features)
+anchors <- FindIntegrationAnchors(seurat_list, normalization.method = "SCT", anchor.features = features)
+integrated <- IntegrateData(anchorset = anchors, normalization.method = "SCT")
 
 #### 6. Scaling, PCA, UMAP, Clustering ####
 DefaultAssay(integrated) <- "integrated"
@@ -82,7 +99,7 @@ integrated <- RunPCA(integrated, npcs = 30)
 
 # Save Elbow plot
 elbow <- ElbowPlot(integrated, ndims = 30)
-ggsave("./Documents/Github/ACM_SN_R_2025/plots/elbow_plot.png", elbow)
+ggsave("/home/gruengroup/srivalli/Github/ACM_SN_R_2025/plots/elbow_plot.png", elbow)
 
 integrated <- FindNeighbors(integrated, dims = 1:30)
 integrated <- FindClusters(integrated, resolution = 0.3)
@@ -90,12 +107,10 @@ integrated <- RunUMAP(integrated, dims = 1:30)
 
 #### 7. UMAP Visualizations ####
 p1 <- DimPlot(integrated, reduction = "umap", group.by = "sample") + ggtitle("By Sample")
-p1
-ggsave("./Documents/Github/ACM_SN_R_2025/plots/umap_by_sample.png", p1)
+ggsave("/home/gruengroup/srivalli/Github/ACM_SN_R_2025/plots/umap_by_sample.png", p1)
 
 p2 <- DimPlot(integrated, reduction = "umap", group.by = "seurat_clusters", label = TRUE) + ggtitle("By Cluster")
-p2
-ggsave("./Documents/Github/ACM_SN_R_2025/plots/umap_by_cluster.png", p2)
+ggsave("/home/gruengroup/srivalli/Github/ACM_SN_R_2025/plots/umap_by_cluster.png", p2)
 
 #### 8. DE genes ####
 cluster_markers <- FindAllMarkers(
@@ -108,14 +123,14 @@ cluster_markers <- FindAllMarkers(
 top5 <- cluster_markers %>% group_by(cluster) %>% top_n(5, avg_log2FC)
 top10 <- cluster_markers %>% group_by(cluster) %>% top_n(10, avg_log2FC)
 
-write.csv(top10, "../Documents/Github/ACM_SN_R_2025/de_top_10_clusters.csv", row.names = FALSE)
+write.csv(top10, "/home/gruengroup/srivalli/Github/ACM_SN_R_2025/de_top_10_clusters.csv", row.names = FALSE)
 
-DotPlot(integrated, features = unique(top5$gene)) + RotatedAxis()
-ggsave("../Documents/Github/ACM_SN_R_2025/dotplot_top5_markers.png")
+p_dot <- DotPlot(integrated, features = unique(top5$gene)) + RotatedAxis()
+ggsave("/home/gruengroup/srivalli/Github/ACM_SN_R_2025/dotplot_top5_markers.png", p_dot)
 
 #### 9. Annotation ####
 ##### Marker Gene Annotation #####
-marker_ref <- read.csv("../Documents/Github/ACM_SN_R_2025/marker_genes_heart- marker_genes.csv", stringsAsFactors = FALSE)
+marker_ref <- read.csv("./home/gruengroup/srivalli/Github/ACM_SN_R_2025/marker_genes_heart- marker_genes.csv", stringsAsFactors = FALSE)
 marker_ref$Marker.Genes <- toupper(marker_ref$Marker.Genes)
 marker_ref$marker_list <- strsplit(marker_ref$Marker.Genes, "[ ,;]+")
 top_markers <- cluster_markers %>%
@@ -171,9 +186,15 @@ integrated$celltype_marker_broad <- plyr::mapvalues(
 
 DimPlot(integrated, group.by = "celltype_marker_subtype", label = TRUE, repel = TRUE) +
   ggtitle("Clusters Annotated by CellType_Subtype")
-ggsave("../Documents/Github/ACM_SN_R_2025/umap_celltype_subtype.png", width = 10, height = 7)
+ggsave("./home/gruengroup/srivalli/Github/ACM_SN_R_2025/umap_marker_subtype.png")
 
 DimPlot(integrated, group.by = "celltype_marker_broad", label = TRUE, repel = TRUE) +
   ggtitle("Clusters Annotated by Broad Cell Type")
-ggsave("../Documents/Github/ACM_SN_R_2025/umap_celltype_broad.png", width = 10, height = 7)
+ggsave("./home/gruengroup/srivalli/Github/ACM_SN_R_2025/umap_marker_broad.png")
 
+SaveH5Seurat(integrated, filename = "/home/gruengroup/srivalli/Github/ACM_SN_R_2025/integrated_annotated.h5Seurat", overwrite = TRUE)
+Convert("/home/gruengroup/srivalli/Github/ACM_SN_R_2025/integrated_annotated.h5Seurat", 
+        dest = "h5ad", 
+        overwrite = TRUE)
+
+saveRDS(integrated, file = "/home/gruengroup/srivalli/Github/ACM_SN_R_2025/integrated_annotated.rds")
