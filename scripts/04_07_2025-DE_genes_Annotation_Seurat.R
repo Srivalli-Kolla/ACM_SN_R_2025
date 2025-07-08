@@ -30,7 +30,7 @@ cluster_names <- c(
   "Ventricular Cardiomyocytes (contractile)",    # 2
   "Cardiac Mast Cells",                          # 3
   "Epicardial Cells",                            # 4
-  "Atrial Cardiomyocytes",                       # 5
+  "Ventricular Cardiomyocytes (Metabolic/Structural)",                       # 5
   "Pericytes (microvascular mural cells)",       # 6
   "Lymphatic Endothelial Cells",                 # 7
   "Endocardial Cells (conduction system)",       # 8
@@ -92,20 +92,20 @@ p_dot
 ggsave("/Volumes/srivalli/dzhi/ACM_SN_R_2025/plots/dotplot_top5_markers.png", p_dot, width = 20, height = 10)
 
 # 1. Seurat Cluster ID
-p0 <- DimPlot(integrated, group.by = "seurat_clusters", label = TRUE, repel = TRUE, label.size = 4) +
+p0 <- DimPlot(integrated, group.by = "seurat_clusters", label = TRUE, repel = TRUE, label.size = 4,raster = FALSE) +
   ggtitle("UMAP by Seurat Cluster ID")
 p0
 ggsave("/Volumes/srivalli/dzhi/ACM_SN_R_2025/plots/umap_seurat_clusters.png", p0, width = 10, height = 7)
 
 # 2. Named clusters
-p1 <- DimPlot(integrated, group.by = "cluster_named", repel = TRUE) +
+p1 <- DimPlot(integrated, group.by = "cluster_named", repel = TRUE,raster = FALSE) +
   ggtitle("UMAP by Annotated Cluster")
 p1
 ggsave("/Volumes/srivalli/dzhi/ACM_SN_R_2025/plots/umap_named_clusters.png", p1, width = 10, height = 7)
 
 # 3. Sample-wise UMAP
 if ("Sample_ID" %in% colnames(integrated@meta.data)) {
-  p2 <- DimPlot(integrated, group.by = "Sample_ID", label = FALSE) +
+  p2 <- DimPlot(integrated, group.by = "Sample_ID", label = FALSE,raster = FALSE) +
     ggtitle("UMAP by Sample")
   p2
   ggsave("/Volumes/srivalli/dzhi/ACM_SN_R_2025/plots/umap_by_sample.png", p2, width = 10, height = 7)
@@ -113,7 +113,7 @@ if ("Sample_ID" %in% colnames(integrated@meta.data)) {
 
 # 4. Genotype-wise UMAP
 if ("Genotype" %in% colnames(integrated@meta.data)) {
-  p3 <- DimPlot(integrated, group.by = "Genotype", label = FALSE) +
+  p3 <- DimPlot(integrated, group.by = "Genotype", label = FALSE,raster = FALSE) +
     ggtitle("UMAP by Genotype")
   p3
   ggsave("/Volumes/srivalli/dzhi/ACM_SN_R_2025/plots/umap_by_genotype.png", p3, width = 10, height = 7)
@@ -121,7 +121,7 @@ if ("Genotype" %in% colnames(integrated@meta.data)) {
 
 # 5. Condition-wise UMAP
 if ("Condition" %in% colnames(integrated@meta.data)) {
-  p4 <- DimPlot(integrated, group.by = "Condition", label = FALSE) +
+  p4 <- DimPlot(integrated, group.by = "Condition", label = FALSE,raster = FALSE) +
     ggtitle("UMAP by Condition")
   p4
   ggsave("/Volumes/srivalli/dzhi/ACM_SN_R_2025/plots/umap_by_Condition.png", p4, width = 10, height = 7)
@@ -131,7 +131,7 @@ if ("Condition" %in% colnames(integrated@meta.data)) {
 p_umap_split <- DimPlot(
   integrated,
   group.by = "cluster_named",
-  split.by = "Condition",
+  split.by = "Condition",,raster = FALSE
 ) +
   ggtitle("UMAP Split by Condition")
 p_umap_split
