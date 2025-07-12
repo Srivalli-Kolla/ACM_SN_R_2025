@@ -183,6 +183,5 @@ cython_debug/
 *plots
 *.png
 *data
-*._*
 *.Rhistory
 scripts/.RDataTmp
