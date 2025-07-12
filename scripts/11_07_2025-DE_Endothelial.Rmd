@@ -1,0 +1,196 @@
+---
+title: "R Notebook - DE Annotation - Endothelial"
+output: html_notebook
+---
+
+```{r}
+library(Seurat)
+library(dplyr)
+library(ggplot2)
+library(patchwork)
+library(tidyr)
+```
+
+```{r}
+singlets <- readRDS("/Volumes/srivalli/dzhi/ACM_SN_R_2025/data_ctrl_noninf/singlets_de_annotated.rds")
+singlets
+```
+
+```{r}
+singlets_en <- subset(
+  singlets,
+  subset = grepl("Endothelial", DE_Annotation_broad)
+)
+singlets_en
+```
+
+```{r}
+unique(singlets_en@meta.data$DE_Annotation_broad)
+```
+
+
+```{r}
+# PCA
+singlets_en <- FindVariableFeatures(singlets_en, selection.method = "vst", nfeatures = 3000)
+singlets_en <- ScaleData(singlets_en)
+singlets_en <- RunPCA(singlets_en, npcs = 30)
+
+# Determine dimensionality
+ElbowPlot(singlets_en, ndims = 30)
+```
+
+```{r}
+# Neighbors
+singlets_en <- FindNeighbors(singlets_en, dims = 1:25)
+singlets_en <- FindClusters(singlets_en, resolution = 0.5)  
+singlets_en <- RunUMAP(singlets_en, dims = 1:25)
+```
+
+```{r}
+p_en_umap <- DimPlot(singlets_en, reduction = "umap", label = TRUE) +
+  ggtitle("en Subclusters")
+p_en_umap
+ggsave("/Volumes/srivalli/dzhi/ACM_SN_R_2025/plots_ctrl_noninf/umap_en_subclusters.png", p_en_umap, width = 8, height = 6)
+```
+
+```{r}
+Idents(singlets_en) <- "seurat_clusters"
+
+# Find all markers between clusters
+en_markers <- FindAllMarkers(
+  singlets_en,
+  assay = "RNA",
+  only.pos = TRUE,
+  min.pct = 0.25,
+  logfc.threshold = 0.25
+)
+```
+
+```{r}
+write.csv(en_markers, "/Volumes/srivalli/dzhi/ACM_SN_R_2025/data_ctrl_noninf/en_subcluster_markers.csv")
+
+# DotPlot for top 5 markers per cluster
+top5 <- en_markers %>%
+  group_by(cluster) %>%
+  top_n(n = 5, wt = avg_log2FC)
+
+top10 <- en_markers %>%
+  group_by(cluster) %>%
+  top_n(n = 10, wt = avg_log2FC) %>%
+  arrange(cluster, desc(avg_log2FC))
+
+write.csv(top10, "/Volumes/srivalli/dzhi/ACM_SN_R_2025/data_ctrl_noninf/Top10_en_Subcluster_Markers.csv", row.names = FALSE)
+
+p0 <- DotPlot(singlets_en, features = unique(top5$gene)) + RotatedAxis()
+p0
+ggsave("/Volumes/srivalli/dzhi/ACM_SN_R_2025/plots_ctrl_noninf/en_subcluster_markers.png",p0,height = 10, width = 20)
+```
+
+```{r}
+en_cluster_annotations <- c(
+  "0" = "Fibrotic/Stress-Associated EN",
+  "1" = "Classical EN",
+  "2" = "Transitional/Activated EN",
+  "3" = "Lymphatic EN",
+  "4" = "Specialized/Immune-Associated EN",
+  "5" = "Fibrotic/Stress-Associated EN",
+  "6" = "Proliferative/Immune-Responsive EN",
+  "7" = "Interferon/Immune-Responsive EN",
+  "8" = "Metabolic/Stress-Responsive EN",
+  "9" = "Vascular/Immune-Interacting EN"
+)
+```
+
+```{r}
+Idents(singlets_en) <- singlets_en$seurat_clusters
+
+# Get the cluster per cell
+cell_clusters <- as.character(Idents(singlets_en))
+names(cell_clusters) <- colnames(singlets_en)
+
+# Map cluster IDs to en annotations
+annotated_labels <- en_cluster_annotations[cell_clusters]
+names(annotated_labels) <- names(cell_clusters)
+
+# Add as metadata
+singlets_en$en_Cluster_Annotation <- annotated_labels
+```
+
+```{r}
+Idents(singlets_en) <- singlets_en$en_Cluster_Annotation
+
+p_en_umap2 <- DimPlot(singlets_en, reduction = "umap",  repel = TRUE) +
+  ggtitle("UMAP of Endothelial Subclusters") +
+  theme_minimal()
+p_en_umap2
+ggsave("/Volumes/srivalli/dzhi/ACM_SN_R_2025/plots_ctrl_noninf/umap_en_anno.png",
+       p_en_umap, width = 8, height = 6)
+```
+
+```{r}
+df_en <- singlets_en@meta.data %>%
+  filter(!is.na(en_Cluster_Annotation)) %>%
+  group_by(en_Cluster_Annotation, Condition) %>%
+  summarise(cell_count = n()) %>%
+  ungroup()
+
+# Plot barplot
+p_bar_en <- ggplot(df_en, aes(x = en_Cluster_Annotation, y = cell_count, fill = Condition)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  geom_text(aes(label = cell_count), 
+            position = position_dodge(width = 0.9), 
+            vjust = -0.2, size = 3) +
+  theme_minimal() +
+  labs(x = "en Subcluster", y = "Cell Count", fill = "Condition") +
+  ggtitle("Endothelial Subclusters per Condition") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+p_bar_en
+
+ggsave("/Volumes/srivalli/dzhi/ACM_SN_R_2025/plots_ctrl_noninf/en_subcluster_barplot.png",
+       p_bar_en, width = 10, height = 6)
+```
+
+```{r}
+singlets$en_Cluster_Annotation <- NA
+en_cells <- colnames(singlets_en)
+singlets$en_Cluster_Annotation[en_cells] <- singlets_en$en_Cluster_Annotation
+singlets$en_Cluster_Annotation <- factor(singlets$en_Cluster_Annotation)
+
+# Plot
+p_en_on_full <- DimPlot(
+  singlets,
+  group.by = "en_Cluster_Annotation",
+  reduction = "umap",
+  repel = TRUE,
+  pt.size = 0.4
+) + 
+  ggtitle("en Subclusters Overlayed on All Cells") +
+  theme_minimal()
+p_en_on_full
+ggsave("/Volumes/srivalli/dzhi/ACM_SN_R_2025/plots_ctrl_noninf/umap_en_clusters_on_all_cells.png",
+       p_en_on_full, width = 10, height = 7)
+
+```
+
+```{r}
+# Plot split by condition
+p_en_split <- DimPlot(
+  singlets,
+  group.by = "en_Cluster_Annotation",
+  reduction = "umap",
+  repel = TRUE,
+  pt.size = 0.4,
+  na.value = "grey80",         # non-en cells shown as grey
+  split.by = "Condition"       # splits by condition
+) +
+  ggtitle("en Subclusters Overlayed and Split by Condition") +
+  theme_minimal()
+p_en_split
+ggsave("/Volumes/srivalli/dzhi/ACM_SN_R_2025/plots_ctrl_noninf/umap_en_clusters_split_by_condition.png",
+       p_en_split, width = 14, height = 6)
+```
+
+```{r}
+saveRDS(singlets,"/Volumes/srivalli/dzhi/ACM_SN_R_2025/data_ctrl_noninf/singlets_en_anno.rds")
+```

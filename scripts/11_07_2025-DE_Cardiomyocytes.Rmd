@@ -1,0 +1,194 @@
+---
+title: "R Notebook - DE Annotation - Cardiomyocytes"
+output: html_notebook
+---
+
+```{r}
+library(Seurat)
+library(dplyr)
+library(ggplot2)
+library(patchwork)
+library(tidyr)
+```
+
+```{r}
+singlets <- readRDS("/Volumes/srivalli/dzhi/ACM_SN_R_2025/data_ctrl_noninf/singlets_de_annotated.rds")
+singlets
+```
+```{r}
+singlets_cm <- subset(
+  singlets,
+  subset = grepl("Cardiomyocyte", DE_Annotation_broad)
+)
+singlets_cm
+```
+```{r}
+# PCA
+singlets_cm <- FindVariableFeatures(singlets_cm, selection.method = "vst", nfeatures = 3000)
+singlets_cm <- ScaleData(singlets_cm)
+singlets_cm <- RunPCA(singlets_cm, npcs = 30)
+
+# Determine dimensionality
+ElbowPlot(singlets_cm, ndims = 30)
+```
+```{r}
+# Neighbors
+singlets_cm <- FindNeighbors(singlets_cm, dims = 1:25)
+singlets_cm <- FindClusters(singlets_cm, resolution = 0.5)  
+singlets_cm <- RunUMAP(singlets_cm, dims = 1:25)
+```
+
+```{r}
+p_cm_umap <- DimPlot(singlets_cm, reduction = "umap", label = TRUE) +
+  ggtitle("CM Subclusters")
+p_cm_umap
+ggsave("/Volumes/srivalli/dzhi/ACM_SN_R_2025/plots_ctrl_noninf/umap_cm_subclusters.png", p_cm_umap, width = 8, height = 6)
+```
+
+```{r}
+Idents(singlets_cm) <- "seurat_clusters"
+
+# Find all markers between clusters
+cm_markers <- FindAllMarkers(
+  singlets_cm,
+  assay = "RNA",
+  only.pos = TRUE,
+  min.pct = 0.25,
+  logfc.threshold = 0.25
+)
+```
+
+```{r}
+write.csv(cm_markers, "/Volumes/srivalli/dzhi/ACM_SN_R_2025/data_ctrl_noninf/CM_subcluster_markers.csv")
+
+# DotPlot for top 5 markers per cluster
+top5 <- cm_markers %>%
+  group_by(cluster) %>%
+  top_n(n = 5, wt = avg_log2FC)
+
+top10 <- cm_markers %>%
+  group_by(cluster) %>%
+  top_n(n = 10, wt = avg_log2FC) %>%
+  arrange(cluster, desc(avg_log2FC))
+
+write.csv(top10, "/Volumes/srivalli/dzhi/ACM_SN_R_2025/data_ctrl_noninf/Top10_CM_Subcluster_Markers.csv", row.names = FALSE)
+
+p0 <- DotPlot(singlets_cm, features = unique(top5$gene)) + RotatedAxis()
+p0
+ggsave("/Volumes/srivalli/dzhi/ACM_SN_R_2025/plots_ctrl_noninf/cm_subcluster_markers.png",p0,height = 10, width = 20)
+```
+
+```{r}
+cm_cluster_annotations <- c(
+  "0" = "Mature Ventricular CMs",
+  "1" = "Fetal/Moderate Stress-like ventricular CMs",
+  "2" = "Vascular-associated/Endothelial-like CMs",
+  "3" = "Extreme Fetal/ANP-high CMs",
+  "4" = "Conduction System-like CMs",
+  "5" = "Proliferating/Immature CMs",
+  "6" = "Fibrotic/Remodeling CMs",
+  "7" = "Immune-interacting CMs",
+  "8" = "Metabolic/Stress-responsive CMs",
+  "9" = "Cell Cycle/Repair CMs",
+  "10" = "Pericyte-like/Transitional CMs",
+  "11" = "Developmental/Immature CMs",
+  "12" = "Neural/Conduction-associated CMs",
+  "13" = "Specialized/Stress-responsive CMs",
+  "14" = "Highly Remodeling/Transitional CMs"
+)
+```
+
+```{r}
+Idents(singlets_cm) <- singlets_cm$seurat_clusters
+
+# Get the cluster per cell
+cell_clusters <- as.character(Idents(singlets_cm))
+names(cell_clusters) <- colnames(singlets_cm)
+
+# Map cluster IDs to CM annotations
+annotated_labels <- cm_cluster_annotations[cell_clusters]
+names(annotated_labels) <- names(cell_clusters)
+
+# Add as metadata
+singlets_cm$CM_Cluster_Annotation <- annotated_labels
+```
+
+```{r}
+Idents(singlets_cm) <- singlets_cm$CM_Cluster_Annotation
+
+p_cm_umap2 <- DimPlot(singlets_cm, reduction = "umap",  repel = TRUE) +
+  ggtitle("UMAP of Cardiomyocyte Subclusters") +
+  theme_minimal()
+p_cm_umap2
+ggsave("/Volumes/srivalli/dzhi/ACM_SN_R_2025/plots_ctrl_noninf/umap_cm_anno.png",
+       p_cm_umap, width = 8, height = 6)
+```
+
+```{r}
+df_cm <- singlets_cm@meta.data %>%
+  filter(!is.na(CM_Cluster_Annotation)) %>%
+  group_by(CM_Cluster_Annotation, Condition) %>%
+  summarise(cell_count = n()) %>%
+  ungroup()
+
+# Plot barplot
+p_bar_cm <- ggplot(df_cm, aes(x = CM_Cluster_Annotation, y = cell_count, fill = Condition)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  geom_text(aes(label = cell_count), 
+            position = position_dodge(width = 0.9), 
+            vjust = -0.2, size = 3) +
+  theme_minimal() +
+  labs(x = "CM Subcluster", y = "Cell Count", fill = "Condition") +
+  ggtitle("Cardiomyocyte Subclusters per Condition") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+p_bar_cm
+
+ggsave("/Volumes/srivalli/dzhi/ACM_SN_R_2025/plots_ctrl_noninf/cm_subcluster_barplot.png",
+       p_bar_cm, width = 10, height = 6)
+```
+
+```{r}
+singlets$CM_Cluster_Annotation <- NA
+cm_cells <- colnames(singlets_cm)
+singlets$CM_Cluster_Annotation[cm_cells] <- singlets_cm$CM_Cluster_Annotation
+singlets$CM_Cluster_Annotation <- factor(singlets$CM_Cluster_Annotation)
+
+# Plot
+p_cm_on_full <- DimPlot(
+  singlets,
+  group.by = "CM_Cluster_Annotation",
+  reduction = "umap",
+  repel = TRUE,
+  pt.size = 0.4
+) + 
+  ggtitle("CM Subclusters Overlayed on All Cells") +
+  theme_minimal()
+p_cm_on_full
+ggsave("/Volumes/srivalli/dzhi/ACM_SN_R_2025/plots_ctrl_noninf/umap_cm_clusters_on_all_cells.png",
+       p_cm_on_full, width = 10, height = 7)
+
+```
+
+```{r}
+# Plot split by condition
+p_cm_split <- DimPlot(
+  singlets,
+  group.by = "CM_Cluster_Annotation",
+  reduction = "umap",
+  repel = TRUE,
+  pt.size = 0.4,
+  na.value = "grey80",         # non-CM cells shown as grey
+  split.by = "Condition"       # splits by condition
+) +
+  ggtitle("CM Subclusters Overlayed and Split by Condition") +
+  theme_minimal()
+p_cm_split
+ggsave("/Volumes/srivalli/dzhi/ACM_SN_R_2025/plots_ctrl_noninf/umap_cm_clusters_split_by_condition.png",
+       p_cm_split, width = 14, height = 6)
+```
+
+```{r}
+saveRDS(singlets,"/Volumes/srivalli/dzhi/ACM_SN_R_2025/data_ctrl_noninf/singlets_cm_anno.rds")
+```
+

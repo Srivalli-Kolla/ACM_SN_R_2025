@@ -1,0 +1,165 @@
+---
+title: "R Notebook - DE Genes Annotation"
+output: html_notebook
+---
+
+```{r}
+library(Seurat)
+library(dplyr)
+library(ggplot2)
+library(patchwork)
+library(tidyr)
+```
+
+```{r}
+singlets <- readRDS("/Volumes/srivalli/dzhi/ACM_SN_R_2025/data_ctrl_noninf/singlets_marker_genes_annotated.RDS")
+singlets
+```
+```{r}
+# Set up on what we need to do DE
+Idents(singlets) <- singlets$seurat_clusters
+```
+
+```{r}
+# DE
+cluster_markers <- FindAllMarkers(
+  singlets,
+  assay = "RNA",
+  only.pos = TRUE,        
+  min.pct = 0.25,         
+  logfc.threshold = 0.25  
+)
+```
+```{r}
+top5 <- cluster_markers %>%
+  group_by(cluster) %>%
+  top_n(5, avg_log2FC) %>%
+  arrange(cluster, desc(avg_log2FC)) %>%
+  pull(gene) %>%
+  unique()
+
+top10 <- cluster_markers %>%
+  group_by(cluster) %>%
+  top_n(10, avg_log2FC) %>%
+  arrange(cluster, desc(avg_log2FC))
+
+write.csv(cluster_markers, "/Volumes/srivalli/dzhi/ACM_SN_R_2025/data_ctrl_noninf/all_markers_per_cluster.csv", row.names = FALSE)
+write.csv(top10, "/Volumes/srivalli/dzhi/ACM_SN_R_2025/data_ctrl_noninf/top10_markers_per_cluster.csv", row.names = FALSE)
+
+p0 <- DotPlot(singlets, features = top5) + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(title = "Top 5 Marker Genes per Cluster")
+p0
+ggsave("/Volumes/srivalli/dzhi/ACM_SN_R_2025/plots_ctrl_noninf/dotplot_DE.png",p0, width = 20, height = 8)
+```
+
+```{r}
+Idents(singlets) <- singlets$seurat_clusters
+broad_annotations <- c(
+  "Endothelial Cells (Vascular/Arterial)",
+  "Fibroblasts (Matrix/ECM)",
+  "Macrophages/Monocytes",
+  "Pericytes/Adventitial Fibroblasts",
+  "Ventricular Cardiomyocytes",
+  "Activated/Remodeling Fibroblasts",
+  "Capillary/Microvascular Endothelial Cells",
+  "Lymphatic Endothelial Cells",
+  "Lymphatic Endothelial Cells",
+  "Smooth Muscle Cells (SMC)",
+  "Macrophages/Monocytes",
+  "Atrial Cardiomyocytes / Stressed CMs",
+  "Fibroblasts (Matrix/ECM)",
+  "T Lymphocytes",
+  "B Lymphocytes",
+  "Smooth Muscle Cells (SMC)",
+  "Proliferating/Dividing Cells",
+  "T Lymphocytes",
+  "Neuronal/Glial-like Cells",
+  "Smooth Muscle Cells (SMC)",
+  "Conduction System/Conduction Cardiomyocytes"
+)
+singlets$DE_Annotation_broad <- factor(broad_annotations[singlets$seurat_clusters])
+```
+
+```{r}
+p1 <- DimPlot(singlets, group.by = "DE_Annotation_broad", repel = TRUE) +
+  ggtitle("UMAP: Broad Cell Type Annotation")
+p1
+ggsave("/Volumes/srivalli/dzhi/ACM_SN_R_2025/plots_ctrl_noninf/celltype_broad_umap.png",p1, width = 10, height = 8)
+```
+
+```{r}
+p_split <- DimPlot(
+  singlets,
+  group.by = "DE_Annotation_broad",
+  split.by = "Condition",
+  repel = TRUE,
+  pt.size = 0.5
+) +
+  ggtitle("UMAP: Broad Cell Type Annotation Split by Condition")
+
+p_split
+
+ggsave(
+  "/Volumes/srivalli/dzhi/ACM_SN_R_2025/plots_ctrl_noninf/celltype_broad_umap_split_by_condition.png",
+  p_split,
+  width = 14,
+  height = 8
+)
+```
+
+
+```{r}
+bar_df <- singlets@meta.data %>%
+  group_by(Condition, DE_Annotation_broad) %>%
+  summarise(cell_count = n()) %>%
+  ungroup()
+p2 <- ggplot(bar_df, aes(x = DE_Annotation_broad, y = cell_count, fill = Condition)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.9)) +
+  geom_text(aes(label = cell_count),
+            position = position_dodge(width = 0.9),
+            vjust = -0.2,
+            size = 3) +
+  theme_minimal() +
+  labs(x = "Cell Type", y = "Cell Count", fill = "Condition") +
+  ggtitle("Condition-wise Cell Type Distribution") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+p2
+ggsave("/Volumes/srivalli/dzhi/ACM_SN_R_2025/plots_ctrl_noninf/bar_celltype_cond.png",p2, width = 20, height = 8)
+```
+
+```{r}
+# DE bewteen Groups
+Idents(singlets) <- "Condition"
+markers_condition <- FindMarkers(
+  singlets,
+  ident.1 = "Ctr_noninf",    
+  ident.2 = "het_KO_noninf",          
+  assay = "RNA",
+  min.pct = 0.1,
+  logfc.threshold = 0.1,
+  only.pos = FALSE        
+)
+write.csv(markers_condition, "/Volumes/srivalli/dzhi/ACM_SN_R_2025/data_ctrl_noninf/Condition_DEG_Control_vs_KO.csv")
+
+markers_condition <- markers_condition %>%
+  tibble::rownames_to_column("gene")
+
+top5_up <- markers_condition %>%
+  arrange(desc(avg_log2FC)) %>%
+  slice_head(n = 5)
+top5_down <- markers_condition %>%
+  arrange(avg_log2FC) %>%
+  slice_head(n = 5)
+
+top10_combined <- bind_rows(top5_up, top5_down)
+top_genes <- top10_combined$gene
+p3 <- DotPlot(singlets, features = top_genes, group.by = "Condition") + RotatedAxis()
+p3
+ggsave("/Volumes/srivalli/dzhi/ACM_SN_R_2025/plots_ctrl_noninf/dotplot_DE_Cond.png",p3)
+```
+
+```{r}
+saveRDS(singlets,"/Volumes/srivalli/dzhi/ACM_SN_R_2025/data_ctrl_noninf/singlets_de_annotated.rds")
+```
+

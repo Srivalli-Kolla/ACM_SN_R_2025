@@ -1,0 +1,192 @@
+---
+title: "R Notebook - Marker Gene Annotation"
+output: html_notebook
+---
+
+```{r}
+library(Seurat)
+library(dplyr)
+library(ggplot2)
+library(patchwork)
+library(tidyr)
+library(stringr)
+library(tibble)
+```
+
+```{r}
+# Data loading
+singlets <- readRDS("/Volumes/srivalli/dzhi/ACM_SN_R_2025/data_ctrl_noninf/combined_singlets.rds")
+singlets
+```
+
+```{r}
+# Check if data is log normalized or not
+range(GetAssayData(singlets, layer = "data"))
+### log-normalized data ranges roughly between 0 and ~10
+```
+
+```{r}
+# Variable Features
+singlets <- FindVariableFeatures(singlets, selection.method = "vst", nfeatures = 3000)
+```
+
+```{r}
+# Data Scaling
+singlets <- ScaleData(singlets)
+
+# PCA
+singlets <- RunPCA(singlets, npcs = 30)
+ElbowPlot(singlets, ndims = 30)
+```
+
+```{r}
+# Neighbors from PCA Clusters
+singlets <- FindNeighbors(singlets, dims = 1:25)
+```
+
+```{r}
+singlets <- FindClusters(singlets, resolution = 0.5)
+singlets <- RunUMAP(singlets, dims = 1:25)
+```
+
+```{r}
+p0 <- DimPlot(singlets, reduction = "umap")
+p0
+ggsave("/Volumes/srivalli/dzhi/ACM_SN_R_2025/plots_ctrl_noninf/clusters_umap.png",p0)
+```
+
+```{r}
+# Marker Gene Annotation
+marker_df <- read.csv("/Volumes/srivalli/dzhi/ACM_SN_R_2025/data_ctrl_noninf/marker_genes_heart.csv",stringsAsFactors = FALSE,sep = ";")
+
+marker_list <- marker_df %>%
+  select(`major.cell.type.names`, `defining.marker.genes`) %>%
+  distinct() %>%
+  group_by(`major.cell.type.names`) %>%
+  summarize(genes = list(unique(unlist(str_split(`defining.marker.genes`, ","))))) %>%
+  { setNames(.$genes, .$`major.cell.type.names`) }
+```
+
+```{r}
+# Add marker gene score per cluster
+for (cell_type in names(marker_list)) {
+  genes <- marker_list[[cell_type]]
+  
+  genes <- intersect(genes, rownames(singlets))
+  
+  singlets <- AddModuleScore(
+    singlets,
+    features = list(genes),
+    name = paste0("score_", gsub(" ", "_", cell_type))
+  )
+}
+```
+
+```{r}
+# Identify clusters with highest scores
+Idents(singlets) <- singlets$seurat_clusters
+clusters <- singlets$seurat_clusters
+cluster_scores <- data.frame()
+
+for (cell_type in names(marker_list)) {
+  score_col <- paste0("score_", gsub(" ", "_", cell_type), "1") 
+
+  scores <- singlets@meta.data[[score_col]]
+  
+  mean_scores <- tapply(scores, clusters, mean)
+  
+  cluster_scores <- rbind(
+    cluster_scores,
+    data.frame(
+      cluster = names(mean_scores),
+      cell_type = cell_type,
+      avg_score = as.numeric(mean_scores)
+    )
+  )
+}
+
+cluster_label <- cluster_scores %>%
+  group_by(cluster) %>%
+  slice_max(avg_score, n = 1) %>%
+  select(cluster, cell_type)
+
+cluster_label_top2 <- cluster_scores %>%
+  group_by(cluster) %>%
+  arrange(desc(avg_score)) %>%
+  mutate(rank = row_number()) %>%
+  filter(rank <= 2) %>%
+  ungroup()
+
+
+# Add cluster labels to metadata or as a named vector for reference
+cluster_labels_named_1st <- cluster_label_top2 %>%
+  filter(rank == 1) %>%
+  select(cluster, cell_type) %>%
+  deframe()
+
+cluster_labels_named_2nd <- cluster_label_top2 %>%
+  filter(rank == 2) %>%
+  select(cluster, cell_type) %>%
+  deframe()
+```
+
+```{r}
+# Adding data 
+cell_clusters <- as.character(Idents(singlets))
+names(cell_clusters) <- colnames(singlets)  
+
+# Map cluster IDs to cluster labels
+mapped_labels <- cluster_labels_named_1st[cell_clusters]  
+mapped_labels_2nd <- cluster_labels_named_2nd[cell_clusters]
+
+# BUT we want the vector named by cell barcodes, not by cluster IDs:
+names(mapped_labels) <- names(cell_clusters)
+names(mapped_labels_2nd) <- names(cell_clusters)
+
+# Add to Seurat metadata
+singlets$top_celltype_label <- mapped_labels
+singlets$second_top_celltype_label <- mapped_labels_2nd
+```
+
+```{r}
+Idents(singlets) <- singlets$top_celltype_label
+
+p1 <- DimPlot(singlets, reduction = "umap", pt.size = 0.5) +
+  ggtitle("UMAP colored by Top Cell Type Label")
+p1
+ggsave("/Volumes/srivalli/dzhi/ACM_SN_R_2025/plots_ctrl_noninf/umap_marker_top1.png",p1,height = 7, width = 10)
+```
+
+```{r}
+Idents(singlets) <- singlets$second_top_celltype_label
+
+p2 <- DimPlot(singlets, reduction = "umap",  pt.size = 0.5) +
+  ggtitle("UMAP colored by Second Top Cell Type Label")
+ggsave("/Volumes/srivalli/dzhi/ACM_SN_R_2025/plots_ctrl_noninf/umap_marker_top2.png",p2, height = 7, width = 10)
+```
+
+```{r}
+Idents(singlets) <- singlets$Sample_ID
+
+p3 <- DimPlot(singlets, reduction = "umap", pt.size = 0.5) +
+  ggtitle("UMAP colored by Sample ID")
+p3
+
+ggsave("/Volumes/srivalli/dzhi/ACM_SN_R_2025/plots_ctrl_noninf/umap_by_sample_id.png", p3, height = 7, width = 10)
+```
+
+```{r}
+Idents(singlets) <- singlets$Condition
+
+p4 <- DimPlot(singlets, reduction = "umap", pt.size = 0.5) +
+  ggtitle("UMAP colored by Condition")
+p4
+
+ggsave("/Volumes/srivalli/dzhi/ACM_SN_R_2025/plots_ctrl_noninf/umap_by_condition.png", p4, height = 7, width = 10)
+```
+
+```{r}
+# Saving
+saveRDS(singlets, "/Volumes/srivalli/dzhi/ACM_SN_R_2025/data_ctrl_noninf/singlets_marker_genes_annotated.RDS")
+```
+

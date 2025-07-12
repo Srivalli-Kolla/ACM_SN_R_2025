@@ -1,0 +1,84 @@
+---
+title: "R Notebook - DE Annotation - Combining Subclusters"
+output: html_notebook
+---
+
+```{r}
+library(Seurat)
+library(dplyr)
+library(ggplot2)
+library(patchwork)
+library(tidyr)
+```
+
+```{r}
+singlets <- readRDS("/Volumes/srivalli/dzhi/ACM_SN_R_2025/data_ctrl_noninf/singlets_de_annotated.rds")
+singlets
+```
+```{r}
+cm <- readRDS("/Volumes/srivalli/dzhi/ACM_SN_R_2025/data_ctrl_noninf/singlets_cm_anno.rds")
+fb <- readRDS("/Volumes/srivalli/dzhi/ACM_SN_R_2025/data_ctrl_noninf/singlets_fb_anno.rds")
+en <- readRDS("/Volumes/srivalli/dzhi/ACM_SN_R_2025/data_ctrl_noninf/singlets_en_anno.rds")
+imm <- readRDS("/Volumes/srivalli/dzhi/ACM_SN_R_2025/data_ctrl_noninf/singlets_imm_anno.rds")
+oth <- readRDS("/Volumes/srivalli/dzhi/ACM_SN_R_2025/data_ctrl_noninf/singlets_others_anno.rds")
+```
+
+```{r}
+singlets$cm_subclusters <- cm$CM_Cluster_Annotation
+singlets$fb_subclusters <- fb$fb_Cluster_Annotation
+singlets$en_subclusters <- en$en_Cluster_Annotation
+singlets$imm_subclusters <- imm$imm_Cluster_Annotation
+singlets$oth_subclusters <- oth$others_Cluster_Annotation
+```
+
+```{r}
+singlets$combined_subcluster <- apply(
+  singlets@meta.data[, c("cm_subclusters", "fb_subclusters", "en_subclusters", "imm_subclusters", "oth_subclusters")],
+  1,
+  function(x) {
+    non_na <- x[!is.na(x) & x != ""]
+    if (length(non_na) > 0) {
+      return(non_na[1])  # take first available annotation
+    } else {
+      return(NA)
+    }
+  }
+)
+
+```
+
+```{r}
+table(!is.na(singlets$combined_subcluster))
+```
+
+```{r}
+Idents(singlets) <- singlets$combined_subcluster
+
+p_combined_umap <- DimPlot(singlets, reduction = "umap", repel = TRUE) +
+  ggtitle("UMAP colored by Combined Subcluster Annotation") +
+  theme_minimal()
+
+p_combined_umap
+
+ggsave("/Volumes/srivalli/dzhi/ACM_SN_R_2025/plots_ctrl_noninf/combined_subcluster_umap.png", p_combined_umap, width = 20, height = 8)
+```
+
+```{r}
+# Create long-form table of counts
+table_long <- singlets@meta.data %>%
+  dplyr::filter(!is.na(combined_subcluster)) %>%
+  dplyr::count(Condition, combined_subcluster, name = "cell_count") %>%
+  dplyr::arrange(combined_subcluster, Condition)
+
+# Write to CSV
+write.csv(
+  table_long,
+  "/Volumes/srivalli/dzhi/ACM_SN_R_2025/data_ctrl_noninf/combined_subcluster_condition_counts.csv",
+  row.names = FALSE
+)
+```
+
+```{r}
+saveRDS(singlets,"/Volumes/srivalli/dzhi/ACM_SN_R_2025/data_ctrl_noninf/singlets_combined_subclusters.rds")
+```
+

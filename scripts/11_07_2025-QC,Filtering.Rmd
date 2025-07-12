@@ -1,0 +1,287 @@
+---
+title: "R Notebook - QC, Filtering"
+output: html_notebook
+---
+
+```{r}
+#### Load required libraries ####
+library(Seurat)
+library(dplyr)
+library(ggplot2)
+library(patchwork)
+library(tibble)
+library(reshape2)
+library(SeuratDisk)
+library(DoubletFinder)
+```
+
+```{r}
+#### Define sample names and Metadata ####
+sample_names <- c(
+  "B3_Lib2", "B4_Lib2", "B6_Lib2", "B7_Lib2",
+  "B9_Lib2", "B10_Lib2"
+)
+data_paths <- paste0("/Volumes/srivalli/dzhi/ACM_SN_R_2025/data/Library2/", sample_names, "/filtered_feature_bc_matrix/")
+
+# Metadata table
+meta_info <- data.frame(
+  sample = paste0("B", c(3, 4, 6, 7, 9, 10)),
+  Sample_Name = c(
+    "20241021_AC_Pkp2-MCMV_Mouse_Single_Heart_1",
+    "20241021_AC_Pkp2-MCMV_Mouse_Single_Heart_2",
+    "20241021_AC_Pkp2-MCMV_Mouse_Single_Heart_4",
+    "20241021_AC_Pkp2-MCMV_Mouse_Single_Heart_5",
+    "20241021_AC_Pkp2-MCMV_Mouse_Single_Heart_7",
+    "20241021_AC_Pkp2-MCMV_Mouse_Single_Heart_8"
+  ),
+  Sex = rep("male", 6),
+  Genotype = c("Ctr", "het_KO", "Ctr", "het_KO", "Ctr", "het_KO"),
+  Treatment = rep("noninf", 6),
+  Condition = c("Ctr_noninf", "het_KO_noninf", "Ctr_noninf", "het_KO_noninf", "Ctr_noninf", "het_KO_noninf"),
+  Sample_ID = c(
+    "B3_Ctr_noninf", "B4_het_KO_noninf",
+    "B6_Ctr_noninf", "B7_het_KO_noninf",
+    "B9_Ctr_noninf", "B10_het_KO_noninf"
+  ),
+  stringsAsFactors = FALSE
+)
+```
+
+```{r}
+seurat_list <- list()
+
+for (i in seq_along(sample_names)) {
+  sample_id <- sample_names[i]
+  data <- Read10X(data.dir = data_paths[i])
+  
+  # Make unique barcodes BEFORE creating SeuratObject
+  colnames(data) <- paste0(colnames(data), "_", sample_id)
+  
+  seu <- CreateSeuratObject(counts = data, project = sample_id)
+  seu$Sample_ID <- sample_id
+  seu$sample_short <- toupper(sub("_.*", "", sample_id))
+  seu[["percent.mt"]] <- PercentageFeatureSet(seu, pattern = "^mt-")
+  
+  # --- Add metadata from meta_info ---
+  meta_row <- meta_info[meta_info$sample == seu$sample_short[1], ]
+  
+  if (nrow(meta_row) == 1) {
+    for (col in colnames(meta_row)) {
+      seu[[col]] <- meta_row[[col]]
+    }
+  } else {
+    warning(paste("Metadata not found for:", sample_id))
+  }
+  
+  seurat_list[[sample_id]] <- seu
+}
+```
+
+```{r}
+# Merging
+combined_raw <- merge(seurat_list[[1]], y = seurat_list[-1])
+```
+
+```{r}
+p_violin_before <- VlnPlot(
+  combined_raw,
+  features = c("nFeature_RNA", "nCount_RNA", "percent.mt"),
+  group.by = "Sample_ID", pt.size = 0.1, ncol = 3
+)
+p_violin_before
+ggsave("/Volumes/srivalli/dzhi/ACM_SN_R_2025/plots_ctrl_noninf/QC-Before_filtering.png",p_violin_before)
+```
+
+```{r}
+# Bar plot of Cell Counts
+cell_counts <- as.data.frame(table(combined_raw$Sample_ID))
+colnames(cell_counts) <- c("Sample_ID", "CellCount")
+
+bar_1 <- ggplot(cell_counts, aes(x = Sample_ID, y = CellCount)) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = CellCount), vjust = -0.5, size = 3) +
+  theme_minimal() +
+  labs(title = "Cell Counts Before Filtering", x = "Sample", y = "Number of Cells") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+ggsave("/Volumes/srivalli/dzhi/ACM_SN_R_2025/plots_ctrl_noninf/Counts-Before_filtering.png",bar_1)
+```
+
+```{r}
+# Filtering QC
+seurat_list_filtered <- lapply(seurat_list, function(obj) {
+  subset(obj, subset = nFeature_RNA > 200 & percent.mt < 10)
+})
+
+# Combine all filtered Seurat objects
+combined_filtered <- merge(seurat_list_filtered[[1]], y = seurat_list_filtered[-1])
+```
+
+```{r}
+p_violin_after <- VlnPlot(
+  combined_filtered,
+  features = c("nFeature_RNA", "nCount_RNA", "percent.mt"),
+  group.by = "Sample_ID", pt.size = 0.1, ncol = 3
+)
+p_violin_after
+ggsave("/Volumes/srivalli/dzhi/ACM_SN_R_2025/plots_ctrl_noninf/QC-After_filtering.png",p_violin_after)
+```
+
+```{r}
+# Bar plot of Cell Counts
+cell_counts <- as.data.frame(table(combined_filtered$Sample_ID))
+colnames(cell_counts) <- c("Sample_ID", "CellCount")
+
+bar2 <- ggplot(cell_counts, aes(x = Sample_ID, y = CellCount)) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = CellCount), vjust = -0.5, size = 3) +
+  theme_minimal() +
+  labs(title = "Cell Counts After Filtering", x = "Sample", y = "Number of Cells") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+ggsave("/Volumes/srivalli/dzhi/ACM_SN_R_2025/plots_ctrl_noninf/Counts-After_filtering.png",bar2)
+```
+
+```{r}
+# Noramlization
+DefaultAssay(combined_filtered) <- "RNA"
+
+# Log-normalize
+combined_filtered <- NormalizeData(combined_filtered, normalization.method = "LogNormalize", scale.factor = 10000)
+
+# Identify 3000 highly variable genes
+combined_filtered <- FindVariableFeatures(combined_filtered, selection.method = "vst", nfeatures = 3000)
+
+# Visualize variable features
+VariableFeaturePlot(combined_filtered)
+```
+
+```{r}
+# Scale data 
+combined_filtered <- ScaleData(combined_filtered, features = VariableFeatures(combined_filtered))
+
+# Run PCA for dimensionality reduction using variable genes
+combined_filtered <- RunPCA(combined_filtered, features = VariableFeatures(combined_filtered))
+
+# Visualize PCA elbow plot to choose how many PCs to use
+ElbowPlot(combined_filtered)
+```
+
+```{r}
+#Compute nearest neighbors graph using chosen PCs
+combined_filtered <- FindNeighbors(combined_filtered, dims = 1:20)
+
+# Cluster cells, tuning resolution as needed (e.g., 0.5)
+combined_filtered <- FindClusters(combined_filtered, resolution = 0.5)
+
+# Run UMAP or t-SNE for visualization
+combined_filtered <- RunUMAP(combined_filtered, dims = 1:20)
+
+# Plot UMAP clusters
+DimPlot(combined_filtered, reduction = "umap", label = TRUE) + ggtitle("Clusters")
+```
+
+```{r}
+# DoubletFinder
+table(combined_filtered$Sample_ID)
+# Create a list of Seurat objects split by sample
+sample_ids <- unique(combined_filtered$Sample_ID)
+seurat_split <- SplitObject(combined_filtered, split.by = "Sample_ID")
+
+doublet_results <- list()
+
+for (sample_id in sample_ids) {
+  seu <- seurat_split[[sample_id]]
+  
+  # Preprocess per sample
+  seu <- NormalizeData(seu)
+  seu <- FindVariableFeatures(seu, selection.method = "vst", nfeatures = 3000)
+  seu <- ScaleData(seu)
+  seu <- RunPCA(seu, npcs = 20)
+  
+  # Expected doublets (adjust fraction if needed)
+  nExp_poi <- round(0.05 * ncol(seu))
+  
+  # Parameter sweep to find optimal pK
+  sweep.res.list <- paramSweep(seu, PCs = 1:20, sct = FALSE)
+  sweep.stats <- summarizeSweep(sweep.res.list, GT = FALSE)
+  bcmvn <- find.pK(sweep.stats)
+  optimal_pK <- as.numeric(as.character(bcmvn$pK[which.max(bcmvn$BCmetric)]))
+  
+  # Run DoubletFinder
+  seu <- doubletFinder(
+    seu,
+    PCs = 1:20,
+    pN = 0.25,
+    pK = optimal_pK,
+    nExp = nExp_poi,
+    reuse.pANN = FALSE,
+    sct = FALSE
+  )
+  
+  doublet_results[[sample_id]] <- seu
+}
+```
+```{r}
+
+doublet_only <- do.call(rbind, lapply(names(doublet_results), function(sample_id) {
+  seu <- doublet_results[[sample_id]]
+  
+  df_col <- grep("^DF.classifications", colnames(seu@meta.data), value = TRUE)
+  if(length(df_col) != 1) stop(paste("Unexpected DF columns for", sample_id))
+  
+  class_vector <- seu@meta.data[[df_col]]
+  doublet_count <- sum(class_vector == "Doublet")
+  
+  data.frame(
+    Sample_ID = sample_id,
+    DoubletCount = doublet_count,
+    stringsAsFactors = FALSE
+  )
+}))
+
+doublet_only
+```
+
+```{r}
+# Plot Doublets
+bar3 <- ggplot(doublet_only, aes(x = Sample_ID, y = DoubletCount, fill = Sample_ID)) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = DoubletCount), vjust = -0.5, size = 4) +
+  theme_minimal() +
+  labs(title = "Number of Doublets per Sample",
+       x = "Sample",
+       y = "Doublet Count") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.position = "none")
+ggsave("/Volumes/srivalli/dzhi/ACM_SN_R_2025/plots_ctrl_noninf/doublet_counts.png",bar3)
+```
+
+```{r}
+#Subset Singlets
+singlet_list <- lapply(names(doublet_results), function(sample_id) {
+  seu <- doublet_results[[sample_id]]
+  
+  # Get the doublet classification column name (string)
+  df_col <- grep("^DF.classifications", colnames(seu@meta.data), value = TRUE)
+  
+  # Extract vector of classifications
+  dbl_class <- seu@meta.data[[df_col]]
+  
+  # Get cells classified as "Singlet"
+  singlet_cells <- rownames(seu@meta.data)[dbl_class == "Singlet"]
+  
+  # Subset Seurat object by these cells
+  singlets <- subset(seu, cells = singlet_cells)
+  return(singlets)
+})
+
+names(singlet_list) <- names(doublet_results)
+
+combined_singlets <- merge(singlet_list[[1]], y = singlet_list[-1])
+```
+
+```{r}
+# Save Objects
+saveRDS(combined_singlets, file = "/Volumes/srivalli/dzhi/ACM_SN_R_2025/data_ctrl_noninf/combined_singlets.rds")
+SaveH5Seurat(combined_singlets, filename = "/Volumes/srivalli/dzhi/ACM_SN_R_2025/data_ctrl_noninf/combined_singlets.h5Seurat")
+```
+
